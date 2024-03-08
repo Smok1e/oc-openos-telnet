@@ -18,14 +18,17 @@ local function download(url)
 
     local request = internet.request(url)
     local connectionStartTime = computer.uptime()
-    while true do
-        local success, reason = request.finishConnect()
-        if success then
-            break
-        end
+
+    local success, reason
+    while not success do
+        success, reason = request.finishConnect()
         
         if success == nil then
             error("error while downloading " .. url)
+        end
+
+        if computer.uptime() - connectionStartTime > CONNECTION_TIMEOUT then
+            error("connection timed out")
         end
     end
 
