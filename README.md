@@ -17,6 +17,8 @@ In OpenOS, type `telnet <address> [<port>]`; Default telnet port is 23.
 
 ![image](https://github.com/Smok1e/oc-openos-telnet/assets/33802666/69c223f4-17ab-44b2-b25e-de6ddc8d3451)
 
-# Installation
-Simply run this command: `wget -f https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/master/installer.lua /tmp/installer.lua && /tmp/installer.lua`
-and wait for installation to complete. After that, you will be able to use telnet command in OpenOS.
+# Download
+wget: 
+```
+wget -f https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/master/installer.lua /tmp/installer.lua && /tmp/installer.lua
+```
