@@ -19,16 +19,32 @@ local socket
 
 -----------------------------------------------
 
-local telnet = libtelnet.new()
-telnet.options = {
-    [libtelnet.OPCODES.TTYPE] = libtelnet.COMMANDS.WILL,
-    [libtelnet.OPCODES.NAWS ] = libtelnet.COMMANDS.WILL
-}
+local function getEnumKey(enum, value)
+    for enumKey, enumValue in pairs(enum) do
+        if enumValue == value then
+            return enumKey
+        end
+    end
 
-telnet.onSendData = function(self, data)
-    socket.write(data)
+    return "unknown"
 end
 
+-----------------------------------------------
+
+local telnet = libtelnet.new()
+telnet.options = {
+--   Option                                     Local                    Remote
+    [libtelnet.OPCODES.TTYPE              ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.NAWS               ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.SEND               ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DO   },
+    [libtelnet.OPCODES.TSPEED             ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.NEW_ENVIRONMENT    ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.REMOTE_FLOW_CONTROL] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.XDISPLOC           ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.STATUS             ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DO   }
+}
+
+local escapeSequenceStarted, escapeSequence = false
 local ignoredEscapeSequences = {
     "[?2004h", 
     "[?2004l", 
@@ -46,8 +62,7 @@ local function processEscapeSequence(sequence)
     term.write("\x1B" .. sequence)
 end
 
-local escapeSequenceStarted, escapeSequence = false
-telnet.onTelnetData = function(self, data)
+local function processTelnetData(data)
     for i = 1, #data do
         local char = data:sub(i, i)
         if char == "\x1B" then
@@ -70,16 +85,40 @@ telnet.onTelnetData = function(self, data)
     end
 end
 
-telnet.onTerminalType = function(self, opcode)
-    if opcode == libtelnet.OPCODES.SEND then
-        telnet:sendTerminalType(TERMINAL_TYPE)
-    end
-end
+telnet.eventHandler = function(self, code, ...)
+    if code == libtelnet.EVENTS.DATA then
+        processTelnetData(...)
+    elseif code == libtelnet.EVENTS.SEND then
+        socket.write(...)
+    elseif code == libtelnet.EVENTS.TTYPE then
+        if ... == libtelnet.OPCODES.SEND then
+            telnet:sendTerminalType(TERMINAL_TYPE)
+        end
+    elseif code == libtelnet.EVENTS.WILL then
+        print(string.format("Negotiation: WILL %s", getEnumKey(libtelnet.OPCODES, ...)))
 
-telnet.onTelnetDo = function(self, opcode)
-    if opcode == libtelnet.OPCODES.NAWS then
-        local _, _, width, height = term.getGlobalArea()
-        telnet:sendWindowSize(width, height)
+    elseif code == libtelnet.EVENTS.WONT then
+        print(string.format("Negotiation: WONT %s", getEnumKey(libtelnet.OPCODES, ...)))
+
+    elseif code == libtelnet.EVENTS.DO then        
+        print(string.format("Negotiation: DO %s", getEnumKey(libtelnet.OPCODES, ...)))
+
+        if ... == libtelnet.OPCODES.NAWS then
+            local _, _, width, height = term.getGlobalArea()
+            telnet:sendWindowSize(width, height)
+        end
+    elseif code == libtelnet.EVENTS.DONT then
+        print(string.format("Negotiation: DONT %s", getEnumKey(libtelnet.OPCODES, ...)))
+    elseif code == libtelnet.EVENTS.SUBNEGOTIATION then
+        local sbOpcode, opcode, data = ...
+        data = data or ""
+
+        term.write(string.format("Subnegotiation: %s %s ", getEnumKey(libtelnet.OPCODES, sbOpcode), getEnumKey(libtelnet.OPCODES, opcode)))
+        for i = 1, #data do
+            term.write(string.format("0x02X ", data:sub(i, i):byte()))
+        end
+
+        term.write("\n")
     end
 end
 
