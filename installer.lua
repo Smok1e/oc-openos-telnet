@@ -4,9 +4,8 @@ local fs = require("filesystem")
 
 local internet = component.internet
 
-local REPO = "https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/master/"
-
 local args, options = shell.parse(...)
+local REPO = "https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/" .. (options.branch or "master") .. "/"
 
 -------------------------------------------
 
@@ -86,6 +85,7 @@ local function help()
     print("Options:")
     print("  -h --help: Print usage and exit")
     print("  -q --quiet: Print only errors")
+    print("     --branch=branch: Specify repository branch")
 end
 
 if options.h or options.help then

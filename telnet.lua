@@ -12,7 +12,7 @@ local internet = component.internet
 -----------------------------------------------
 
 local CONNECTION_TIMEOUT = 5
-local TERMINAL_TYPE = "ANSI"
+local TERMINAL_TYPE = "Linux"
 
 local running = true
 local socket
@@ -106,6 +106,11 @@ local function onKeyDown(eventData)
     return false
 end
 
+local function onClipboard(eventData)
+    telnet:send(eventData[3])
+    return true
+end
+
 local function onInternetReady(eventData)
     if eventData[3] ~= socket.id() then
         return false
@@ -132,6 +137,8 @@ local function onEvent(eventData)
         return onKeyDown(eventData)
     elseif eventType == "internet_ready" then
         return onInternetReady(eventData)
+    elseif eventType == "clipboard" then
+        return onClipboard(eventData)
     end
 end
 
