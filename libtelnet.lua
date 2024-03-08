@@ -1,5 +1,17 @@
 local libtelnet = {}
 
+-----------------------------------------------
+
+local function getEnumKey(enum, value)
+    for enumKey, enumValue in pairs(enum) do
+        if enumValue == value then
+            return enumKey
+        end
+    end
+
+    return "unknown"
+end
+
 ----------------------------------------------- Memory buffer
 
 -- Check if some unread data remains in buffer
@@ -76,8 +88,10 @@ libtelnet.COMMANDS = {
 
 -- Telnet opcodes
 libtelnet.OPCODES = {
-    IS                  = 0x00,  
+    IS                  = 0x00,
+    BT                  = 0x00,   -- Binary transmission
     SEND                = 0x01,
+    ECHO                = 0x01,
     SUPPRESS_GO_AHEAD   = 0x03,
     STATUS              = 0x05,
     TTYPE               = 0x18, -- Terminal type
@@ -97,7 +111,8 @@ libtelnet.EVENTS = {
     WONT                = 0x04, -- WONT command has been received
     DO                  = 0x05, -- DO command has been received
     DONT                = 0x06, -- DONT command has been received
-    SUBNEGOTIATION      = 0x07  -- Subnegotiation data has been received
+    SUBNEGOTIATION      = 0x07, -- Subnegotiation data has been received
+    COMMAND             = 0x08  -- Unhandled command
 }
 
 -- Internal handler state codes
@@ -115,6 +130,14 @@ local STATE = {
 
 ----------------------------------------------- Telnet send methods
 
+local function telnetSendTextData(self, textData)
+    if self:getLocalOptionState(libtelnet.OPCODES.ECHO) then
+        self:eventHandler(libtelnet.EVENTS.DATA, textData)
+    end
+
+    self:eventHandler(libtelnet.EVENTS.SEND, textData)
+end
+
 local function telnetSend(self, ...)
     local buffer = memoryBufferNew()
     buffer:write(...)
@@ -122,29 +145,40 @@ local function telnetSend(self, ...)
     self:eventHandler(libtelnet.EVENTS.SEND, buffer:getData())
 end
 
+-- Send simple telnet command
 local function telnetSendCommand(self, command, ...)
     self:send(libtelnet.COMMANDS.IAC, command, ...)
 end
 
+-- Begin subnegotiation process
 local function telnetBeginSubnegotiation(self, opcode, ...)
     self:sendCommand(libtelnet.COMMANDS.SB, opcode, ...)
 end
 
+-- Complete subnegotiation process
 local function telnetEndSubnegotiation(self)
     self:sendCommand(libtelnet.COMMANDS.SE)
 end
 
+-- Shortcut for begin/end subnegotiation
 local function telnetSendSubnegotiation(self, opcode, ...)
     self:beginSubnegotiation(opcode, ...)
     self:endSubnegotiation()
 end
 
+-- Send terminal type information to the remote end
 local function telnetSendTerminalType(self, ttype)
     self:sendSubnegotiation(libtelnet.OPCODES.TTYPE, libtelnet.OPCODES.IS, ttype)
 end
 
+-- Send window size information to the remote end
 local function telnetSendWindowSize(self, width, height)
     self:sendSubnegotiation(libtelnet.OPCODES.NAWS, libtelnet.OPCODES.IS, width, libtelnet.OPCODES.IS, height)
+end
+
+-- Request remote end to enable or disable binary transmission mode
+local function telnetSetBinaryMode(self, binaryMode)
+    self:sendCommand(binaryMode and libtelnet.COMMANDS.DO or libtelnet.COMMANDS.DONT, libtelnet.OPCODES.BT)
 end
 
 ----------------------------------------------- Telnet options methods
@@ -172,27 +206,30 @@ end
 -- Process negotiation
 local function telnetProcessNegotiation(self, opcode)
     if self.state == STATE.WILL then
-        local command = (self.options[opcode] or {})[2] or libtelnet.COMMANDS.DONT
-        self:sendCommand(command, opcode)
-        self:setRemoteOptionState(opcode, command == libtelnet.COMMANDS.DO)
+        self:setRemoteOptionState(opcode, true)
+
+        if self.options[opcode] == nil or self.options[opcode][2] == libtelnet.COMMANDS.DONT then
+            self:sendCommand(libtelnet.COMMANDS.DONT, opcode)
+        end
 
         self:eventHandler(libtelnet.EVENTS.WILL, opcode)
 
     elseif self.state == STATE.WONT then
-        self:sentCommand(libtelnet.COMMANDS.DONT, opcode)
         self:setRemoteOptionState(opcode, false)
-
         self:eventHandler(libtelnet.EVENTS.WONT, opcode)
 
     elseif self.state == STATE.DO then
-        local command = (self.options[opcode] or {})[1] or libtelnet.COMMANDS.WONT
-        self:sendCommand(command, opcode)
-        self:setLocalOptionState(opcode, command == libtelnet.COMMANDS.WILL)
+        if self.options[opcode] == nil or self.options[opcode][1] == libtelnet.COMMANDS.WONT then
+            self:sendCommand(libtelnet.COMMANDS.WONT, opcode)
+            self:setLocalOptionState(opcode, false)
+        else
+            self:sendCommand(libtelnet.COMMANDS.WILL, opcode)
+            self:setLocalOptionState(opcode, true)
+        end
 
         self:eventHandler(libtelnet.EVENTS.DO, opcode)
         
     elseif self.state == STATE.DONT then
-        self:sendCommand(libtelnet.COMMANDS.WONT, opcode)
         self:setLocalOptionState(opcode, false)
 
         self:eventHandler(libtelnet.EVENTS.DONT, opcode)
@@ -210,9 +247,9 @@ local function telnetProcessSubnegotiation(self)
     end
 
     self:eventHandler(
-        libtelnet.EVENTS.SUBNEGOTIATION, 
-        self.subnegotiationOpcode, 
-        opcode, 
+        libtelnet.EVENTS.SUBNEGOTIATION,
+        self.subnegotiationOpcode,
+        opcode,
         self.subnegotiationBuffer:getData()
     )
 end
@@ -221,18 +258,18 @@ end
 local function telnetReceive(self, data)
     local buffer = memoryBufferNew(data)
 
+    local offset = buffer.offset
+    local function resetOffset()
+        offset = buffer.offset + 1
+    end
+
     -- Perhaps it's called state machine
     while buffer:hasData() do
         local byte, char = buffer:readByte()
 
         if self.state == STATE.DATA then
-            -- If first bit is set to 1 then we received a telnet command
-            if (byte >> 7) & 1 == 0 then
-                self:eventHandler(libtelnet.EVENTS.DATA, char)
-            else
-                if byte == libtelnet.COMMANDS.IAC then
-                    self.state = STATE.COMMAND
-                end
+            if byte == libtelnet.COMMANDS.IAC then
+                self.state = STATE.COMMAND
             end
 
         -- Processing telnet command followed after IAC
@@ -240,13 +277,15 @@ local function telnetReceive(self, data)
             -- Escaping IAC
             if byte == libtelnet.COMMANDS.IAC then
                 self:eventHandler(libtelnet.EVENTS.DATA, char)
+
+                resetOffset()
                 self.state = STATE.DATA
 
             -- Initiating subnegotiation
             elseif byte == libtelnet.COMMANDS.SB then
                 self.state = STATE.SB
 
-            -- Initiating negotiation
+            -- Initiating WILL/WONT/DO/DONT negotiation
             elseif byte == libtelnet.COMMANDS.WILL then
                 self.state = STATE.WILL
                  
@@ -258,6 +297,13 @@ local function telnetReceive(self, data)
 
             elseif byte == libtelnet.COMMANDS.DONT then
                 self.state = STATE.DONT
+
+            -- Unhandled command
+            else
+                self:eventHandler(libtelnet.COMMANDS.COMMAND, byte)
+
+                resetOffset()
+                self.state = STATE.DATA
 
             end
 
@@ -272,17 +318,22 @@ local function telnetReceive(self, data)
                 self.state = STATE.SB_COMMAND
             else
                 self.subnegotiationBuffer:write(byte)
+                resetOffset()
             end
 
         elseif self.state == STATE.SB_COMMAND then
             -- Subnegotiation done
             if byte == libtelnet.COMMANDS.SE then
                 self:processSubnegotiation()
+                
+                resetOffset()
                 self.state = STATE.DATA
 
             -- Escaping IAC
             elseif byte == libtelnet.COMMANDS.IAC then
                 self.subnegotiationBuffer:write(char)
+
+                resetOffset()
                 self.state = STATE.SB_DATA
             end
 
@@ -293,8 +344,16 @@ local function telnetReceive(self, data)
             or self.state == STATE.DONT 
         then
             self:processNegotiation(byte)
+
+            resetOffset()
             self.state = STATE.DATA
         end
+    end
+
+    -- Process any remaining bytes as text
+    if self.state == STATE.DATA and offset ~= buffer.offset then
+        buffer.offset = offset
+        self:eventHandler(libtelnet.EVENTS.DATA, buffer:getData())
     end
 end
 
@@ -307,6 +366,7 @@ function libtelnet.new()
         optionsState = {}
     }
 
+    telnet.sendTextData          = telnetSendTextData
     telnet.send                  = telnetSend
     telnet.sendCommand           = telnetSendCommand
     telnet.beginSubnegotiation   = telnetBeginSubnegotiation
@@ -314,6 +374,7 @@ function libtelnet.new()
     telnet.sendSubnegotiation    = telnetSendSubnegotiation
     telnet.sendTerminalType      = telnetSendTerminalType
     telnet.sendWindowSize        = telnetSendWindowSize
+    telnet.setBinaryMode         = telnetSetBinaryMode
 
     telnet.getLocalOptionState   = telnetGetLocalOptionState
     telnet.getRemoteOptionState  = telnetGetRemoteOptionState
