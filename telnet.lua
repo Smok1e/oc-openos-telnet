@@ -94,31 +94,11 @@ telnet.eventHandler = function(self, code, ...)
         if ... == libtelnet.OPCODES.SEND then
             telnet:sendTerminalType(TERMINAL_TYPE)
         end
-    elseif code == libtelnet.EVENTS.WILL then
-        print(string.format("Negotiation: WILL %s", getEnumKey(libtelnet.OPCODES, ...)))
-
-    elseif code == libtelnet.EVENTS.WONT then
-        print(string.format("Negotiation: WONT %s", getEnumKey(libtelnet.OPCODES, ...)))
-
     elseif code == libtelnet.EVENTS.DO then        
-        print(string.format("Negotiation: DO %s", getEnumKey(libtelnet.OPCODES, ...)))
-
         if ... == libtelnet.OPCODES.NAWS then
             local _, _, width, height = term.getGlobalArea()
             telnet:sendWindowSize(width, height)
         end
-    elseif code == libtelnet.EVENTS.DONT then
-        print(string.format("Negotiation: DONT %s", getEnumKey(libtelnet.OPCODES, ...)))
-    elseif code == libtelnet.EVENTS.SUBNEGOTIATION then
-        local sbOpcode, opcode, data = ...
-        data = data or ""
-
-        term.write(string.format("Subnegotiation: %s %s ", getEnumKey(libtelnet.OPCODES, sbOpcode), getEnumKey(libtelnet.OPCODES, opcode)))
-        for i = 1, #data do
-            term.write(string.format("0x02X ", data:sub(i, i):byte()))
-        end
-
-        term.write("\n")
     end
 end
 
