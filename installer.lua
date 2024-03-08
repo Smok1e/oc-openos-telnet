@@ -24,7 +24,7 @@ local function download(url)
         success, reason = request.finishConnect()
         
         if success == nil then
-            error("error while downloading " .. url)
+            error("unable to download " .. url)
         end
 
         if computer.uptime() - connectionStartTime > CONNECTION_TIMEOUT then
