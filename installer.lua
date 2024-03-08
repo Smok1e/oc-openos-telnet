@@ -1,10 +1,13 @@
 local component = require("component")
+local computer = require("computer")
 local shell = require("shell")
 local fs = require("filesystem")
 
 local internet = component.internet
 
 local args, options = shell.parse(...)
+
+local CONNECTION_TIMEOUT = 5
 local REPO = "https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/" .. (options.branch or "master") .. "/"
 
 -------------------------------------------
@@ -13,9 +16,17 @@ local REPO = "https://raw.githubusercontent.com/Smok1e/oc-openos-telnet/" .. (op
 local function download(url)
     checkArg(1, url, "string")
 
-    local request, reason = internet.request(url)
-    if not request then
-        return nil, reason
+    local request = internet.request(url)
+    local connectionStartTime = computer.uptime()
+    while true do
+        local success, reason = request.finishConnect()
+        if success then
+            break
+        end
+        
+        if success == nil then
+            error("error while downloading " .. url)
+        end
     end
 
     local data, chunk = ""
