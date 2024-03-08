@@ -6,6 +6,7 @@ local event = require("event")
 local term = require("term")
 local shell = require("shell")
 local libtelnet = require("libtelnet")
+local unicode = require("unicode")
 
 local internet = component.internet
 
