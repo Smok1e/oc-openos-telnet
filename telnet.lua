@@ -20,21 +20,40 @@ local socket
 
 -----------------------------------------------
 
-local telnet = libtelnet.new()
-telnet.options = {
-    [libtelnet.OPCODES.TTYPE] = libtelnet.COMMANDS.WILL,
-    [libtelnet.OPCODES.NAWS ] = libtelnet.COMMANDS.WILL
-}
+local function getEnumKey(enum, value)
+    for enumKey, enumValue in pairs(enum) do
+        if enumValue == value then
+            return enumKey
+        end
+    end
 
-telnet.onSendData = function(self, data)
-    socket.write(data)
+    return "unknown"
 end
 
+-----------------------------------------------
+
+local telnet = libtelnet.new()
+telnet.options = {
+--   Option                                     Local                    Remote
+    [libtelnet.OPCODES.TTYPE              ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.NAWS               ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.ECHO               ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DO   },
+    [libtelnet.OPCODES.BT                 ] = { libtelnet.COMMANDS.WILL, libtelnet.COMMANDS.DO   },
+    [libtelnet.OPCODES.TSPEED             ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.NEW_ENVIRONMENT    ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.REMOTE_FLOW_CONTROL] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.XDISPLOC           ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DONT },
+    [libtelnet.OPCODES.STATUS             ] = { libtelnet.COMMANDS.WONT, libtelnet.COMMANDS.DO   }
+}
+
+local escapeSequenceStarted, escapeSequence = false
 local ignoredEscapeSequences = {
     "[?2004h", 
     "[?2004l", 
     "[?25h", 
-    "[?25l"
+    "[?25l",
+    "[3J",
+    "[1P", "[2P", "[3P", "[4P", "[5P"
 }
 
 local function processEscapeSequence(sequence)
@@ -47,10 +66,9 @@ local function processEscapeSequence(sequence)
     term.write("\x1B" .. sequence)
 end
 
-local escapeSequenceStarted, escapeSequence = false
-telnet.onTelnetData = function(self, data)
-    for i = 1, #data do
-        local char = data:sub(i, i)
+local function processTelnetData(data)
+    for i = 1, unicode.wlen(data) do
+        local char = unicode.sub(data, i, i)
         if char == "\x1B" then
             escapeSequenceStarted = true
             escapeSequence = ""
@@ -71,16 +89,20 @@ telnet.onTelnetData = function(self, data)
     end
 end
 
-telnet.onTerminalType = function(self, opcode)
-    if opcode == libtelnet.OPCODES.SEND then
-        telnet:sendTerminalType(TERMINAL_TYPE)
-    end
-end
-
-telnet.onTelnetDo = function(self, opcode)
-    if opcode == libtelnet.OPCODES.NAWS then
-        local _, _, width, height = term.getGlobalArea()
-        telnet:sendWindowSize(width, height)
+telnet.eventHandler = function(self, code, ...)
+    if code == libtelnet.EVENTS.DATA then
+        processTelnetData(...)
+    elseif code == libtelnet.EVENTS.SEND then
+        socket.write(...)
+    elseif code == libtelnet.EVENTS.TTYPE then
+        if ... == libtelnet.OPCODES.SEND then
+            telnet:sendTerminalType(TERMINAL_TYPE)
+        end
+    elseif code == libtelnet.EVENTS.DO then        
+        if ... == libtelnet.OPCODES.NAWS then
+            local _, _, width, height = term.getGlobalArea()
+            telnet:sendWindowSize(width, height)
+        end
     end
 end
 
@@ -100,7 +122,7 @@ local function onKeyDown(eventData)
             telnet:send("\x1B[D")
         end
     else
-        telnet:send(string.char(byte))
+        telnet:sendTextData(utf8.char(byte))
         return true
     end
 
@@ -146,9 +168,24 @@ end
 -----------------------------------------------
 
 local args, options = shell.parse(...)
+
+local function info(format, ...)
+    if not options.q and not options.quiet then
+        term.write(format:format(...))
+    end
+end
+
 if #args < 1 or options.help or options.h then
     print("Usage: telnet <address> [<port>]")
+    print("  -h --help: Print usage and exit")
+    print("  -q --quiet: Print only errors")
+    print("     --ttype=<ttype>: Set terminal type; Default is " .. TERMINAL_TYPE)
     return
+end
+
+if options.ttype then
+    TERMINAL_TYPE = options.ttype
+    info("Terminal is %s\n", TERMINAL_TYPE)
 end
 
 local address = args[1]
@@ -158,14 +195,14 @@ if not port then
     return
 end
 
-term.write(string.format("Connecting to %s:%d...\n", address, port))
+info("Connecting to %s:%d...\n", address, port)
 
 socket = internet.connect(address, port)
 local connectionStartTime = computer.uptime()
 while true do
     local success, reason = socket.finishConnect()
     if success then
-        term.write("Connection established\n")
+        info("Connection established\n")
         break
     end
 
@@ -179,6 +216,8 @@ while true do
         return
     end
 end
+
+telnet:setBinaryMode(true)
 
 while running do
     onEvent({term.pull()})
